@@ -15,7 +15,10 @@
  */
 package com.netflix.servo.util;
 
+import java.util.concurrent.TimeUnit;
+
 import com.netflix.servo.jsr166e.ConcurrentHashMapV8;
+
 import org.testng.annotations.Test;
 
 import static org.testng.Assert.assertEquals;
@@ -35,7 +38,12 @@ public class ExpiringCacheTest {
     public void testGet() throws Exception {
         ManualClock clock = new ManualClock(0L);
         CountingFun fun = new CountingFun();
-        ExpiringCache<String, Integer> map = new ExpiringCache<String, Integer>(100L, fun, 100L, clock);
+        ExpiringCache<String, Integer> map = 
+                ExpiringCache.builder(fun)
+                             .expiresAfter(100L, TimeUnit.MILLISECONDS)
+                             .expirationCheckFrequency(100L, TimeUnit.MILLISECONDS)
+                             .withClock(clock)
+                             .build();
 
         Integer three = map.get("foo");
         assertEquals(three, Integer.valueOf(3));

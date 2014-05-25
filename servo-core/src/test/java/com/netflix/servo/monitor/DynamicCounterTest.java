@@ -30,6 +30,7 @@ import org.testng.annotations.Test;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
@@ -78,13 +79,18 @@ public class DynamicCounterTest {
         DynamicCounter theInstance = getInstance();
         Field counters = DynamicCounter.class.getDeclaredField("counters");
         counters.setAccessible(true);
-        ExpiringCache<MonitorConfig, Counter> newShortExpiringCache = new ExpiringCache<MonitorConfig, Counter>(60000L,
+        ExpiringCache<MonitorConfig, Counter> newShortExpiringCache =
+                ExpiringCache.builder(
                 new ConcurrentHashMapV8.Fun<MonitorConfig, Counter>() {
                     @Override
                     public Counter apply(final MonitorConfig config) {
                         return new StepCounter(config, clock);
                     }
-                }, 100L, clock);
+                })
+                .expiresAfter(60000L, TimeUnit.MILLISECONDS)
+                .expirationCheckFrequency(100L, TimeUnit.MILLISECONDS)
+                .withClock(clock)
+                .build();
 
         counters.set(theInstance, newShortExpiringCache);
     }

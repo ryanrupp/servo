@@ -20,6 +20,7 @@ import com.google.common.base.Preconditions;
 import com.netflix.servo.DefaultMonitorRegistry;
 import com.netflix.servo.jsr166e.ConcurrentHashMapV8;
 import com.netflix.servo.tag.TagList;
+import com.netflix.servo.util.CacheRemovalListener;
 import com.netflix.servo.util.ExpiringCache;
 
 import java.util.List;
@@ -30,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * (name, tagList), or {@link MonitorConfig}. Timers are automatically expired after 15 minutes of
  * inactivity.
  */
-public final class DynamicTimer extends AbstractMonitor<Long> implements CompositeMonitor<Long> {
+public final class DynamicTimer extends AbstractMonitor<Long> implements Monitor<Long> {
     private static final String DEFAULT_EXPIRATION = "15";
     private static final String DEFAULT_EXPIRATION_UNIT = "MINUTES";
     private static final String CLASS_NAME = DynamicTimer.class.getCanonicalName();
@@ -80,13 +81,24 @@ public final class DynamicTimer extends AbstractMonitor<Long> implements Composi
                 System.getProperty(EXPIRATION_PROP_UNIT, DEFAULT_EXPIRATION_UNIT);
         final long expirationValue = Long.valueOf(expiration);
         final TimeUnit expirationUnitValue = TimeUnit.valueOf(expirationUnit);
-        final long expireAfterMs = expirationUnitValue.toMillis(expirationValue);
-        timers = new ExpiringCache<ConfigUnit, Timer>(expireAfterMs, new ConcurrentHashMapV8.Fun<ConfigUnit, Timer>() {
-            @Override
-            public Timer apply(final ConfigUnit configUnit) {
-                return new BasicTimer(configUnit.config, configUnit.unit);
-            }
-        });
+        timers =
+                ExpiringCache.builder(new ConcurrentHashMapV8.Fun<ConfigUnit, Timer>() {
+                    @Override
+                    public Timer apply(final ConfigUnit configUnit) {
+                        final Timer timer = new BasicTimer(configUnit.config, configUnit.unit);
+                        DefaultMonitorRegistry.getInstance().register(timer);
+                        return timer;
+                    }
+                })
+                .expiresAfter(expirationValue, expirationUnitValue)
+                .withRemovalListener(new CacheRemovalListener<DynamicTimer.ConfigUnit, Timer>() {
+
+                    @Override
+                    public void onRemoval(ConfigUnit config, Timer timer) {
+                        DefaultMonitorRegistry.getInstance().unregister(timer);
+                    }
+                })
+                .build();
         DefaultMonitorRegistry.getInstance().register(this);
     }
 
@@ -164,9 +176,9 @@ public final class DynamicTimer extends AbstractMonitor<Long> implements Composi
     }
 
     /**
-     * {@inheritDoc}
+     * Gets all the timers registered via the DynamicTimer.
+     * @return The timer monitors
      */
-    @Override
     @SuppressWarnings("unchecked")
     public List<Monitor<?>> getMonitors() {
         List list = timers.values();

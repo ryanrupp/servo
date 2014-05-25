@@ -16,13 +16,16 @@
 package com.netflix.servo.monitor;
 
 import com.google.common.collect.ImmutableList;
+import com.netflix.servo.DefaultMonitorRegistry;
 import com.netflix.servo.jsr166e.ConcurrentHashMapV8;
 import com.netflix.servo.tag.BasicTag;
 import com.netflix.servo.tag.BasicTagList;
 import com.netflix.servo.tag.Tag;
 import com.netflix.servo.tag.TagList;
+import com.netflix.servo.util.CacheRemovalListener;
 import com.netflix.servo.util.ExpiringCache;
 import com.netflix.servo.util.ManualClock;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.BeforeMethod;
@@ -84,14 +87,27 @@ public class DynamicTimerTest {
         DynamicTimer theInstance = getInstance();
         Field timers = DynamicTimer.class.getDeclaredField("timers");
         timers.setAccessible(true);
-        ExpiringCache<DynamicTimer.ConfigUnit, Timer> newShortExpiringCache =
-                new ExpiringCache<DynamicTimer.ConfigUnit, Timer>(1000L,
+        ExpiringCache<DynamicTimer.ConfigUnit, Timer> newShortExpiringCache = 
+                ExpiringCache.builder(
                         new ConcurrentHashMapV8.Fun<DynamicTimer.ConfigUnit, Timer>() {
                             @Override
                             public Timer apply(final DynamicTimer.ConfigUnit configUnit) {
-                                return new BasicTimer(configUnit.config, configUnit.unit);
+                                final Timer timer = new BasicTimer(configUnit.config, configUnit.unit);
+                                DefaultMonitorRegistry.getInstance().register(timer);
+                                return timer;
                             }
-                        }, 100L, clock);
+                        })
+                        .withRemovalListener(new CacheRemovalListener<DynamicTimer.ConfigUnit, Timer>() {
+                            
+                            @Override
+                            public void onRemoval(DynamicTimer.ConfigUnit config, Timer timer) {
+                                DefaultMonitorRegistry.getInstance().unregister(timer);
+                            }
+                        })
+                        .expiresAfter(1000L, TimeUnit.MILLISECONDS)
+                        .expirationCheckFrequency(100L, TimeUnit.MILLISECONDS)
+                        .withClock(clock)
+                        .build();
 
         timers.set(theInstance, newShortExpiringCache);
     }

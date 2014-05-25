@@ -39,6 +39,89 @@ public class ExpiringCache<K, V> {
     private final long expireAfterMs;
     private final ConcurrentHashMapV8.Fun<K, Entry<V>> entryGetter;
     private final Clock clock;
+    private final CacheRemovalListener<K, V> removalListener;
+
+    /**
+     * Creates a builder for an {@link ExpiringCache} using the specified getter.
+     * @param getter the getter the cache uses
+     * @return       the builder
+     */
+    public static <K, V> Builder<K, V> builder(ConcurrentHashMapV8.Fun<K, V> getter) {
+        return new Builder<K, V>(getter);
+    }
+
+    /**
+     * The builder for {@link ExpiringCache}.
+     * @param <K> the key type for the cache being built
+     * @param <V> the value type for the cache being built
+     */
+    public static final class Builder<K, V> {
+
+        private final ConcurrentHashMapV8.Fun<K, V> getter;
+        private long expirationDurationMs = TimeUnit.MINUTES.toMillis(15);
+        private long expirationFrequencyMs = TimeUnit.MINUTES.toMillis(1);
+        private CacheRemovalListener<K, V> removalListener;
+        private Clock expirationClock = ClockWithOffset.INSTANCE;
+
+        private Builder(ConcurrentHashMapV8.Fun<K, V> getter) {
+            this.getter = getter;
+        }
+
+        /**
+         * The amount of time in which non-accessed records expire.
+         * Defaults to 15 minute expiration.
+         * @param duration the time duration
+         * @param unit     the time unit
+         * @return         the builder
+         */
+        public Builder<K, V> expiresAfter(long duration, TimeUnit unit) {
+            this.expirationDurationMs = unit.toMillis(duration);
+            return this;
+        }
+
+        /**
+         * How often the cache checks for and evicts expired entries.
+         * Defaults to 1 minute checks.
+         * @param duration  the time duration
+         * @param unit      the time unit
+         * @return          the builder
+         */
+        public Builder<K, V> expirationCheckFrequency(long duration, TimeUnit unit) {
+            this.expirationFrequencyMs = unit.toMillis(duration);
+            return this;
+        }
+
+        /**
+         * Specifies a removal listener which is called when entries are expired
+         * in the cache.
+         * @param listener the removal listener
+         * @return         the builder
+         */
+        public Builder<K, V> withRemovalListener(CacheRemovalListener<K, V> listener) {
+            this.removalListener = listener;
+            return this;
+        }
+
+        /**
+         * The clock to used to determine expiration. This is mainly used for unit
+         * testing to modify the timing behavior.
+         * @param clock  the clock
+         * @return       the builder
+         */
+        public Builder<K, V> withClock(Clock clock) {
+            this.expirationClock = clock;
+            return this;
+        }
+
+        /**
+         * Builds the {@link ExpiringCache} given the configuration.
+         * @return the Expiring Cache
+         */
+        public ExpiringCache<K, V> build() {
+            return new ExpiringCache<K, V>(this);
+        }
+
+    }
 
     private static class Entry<V> {
         private volatile long accessTime;
@@ -92,34 +175,16 @@ public class ExpiringCache<K, V> {
         service = Executors.newSingleThreadScheduledExecutor(threadFactory);
     }
 
-    /**
-     * Create a new ExpiringCache that will expire entries after a given number of milliseconds
-     * computing the values as needed using the given getter.
-     *
-     * @param expireAfterMs Number of milliseconds after which entries will be evicted
-     * @param getter        Function that will be used to compute the values
-     */
-    public ExpiringCache(final long expireAfterMs, final ConcurrentHashMapV8.Fun<K, V> getter) {
-        this(expireAfterMs, getter, TimeUnit.MINUTES.toMillis(1), ClockWithOffset.INSTANCE);
-    }
-
-    /**
-     * For unit tests.
-     * Create a new ExpiringCache that will expire entries after a given number of milliseconds
-     * computing the values as needed using the given getter.
-     *
-     * @param expireAfterMs    Number of milliseconds after which entries will be evicted
-     * @param getter           Function that will be used to compute the values
-     * @param expirationFreqMs Frequency at which to schedule the job that evicts entries from the cache.
-     */
-    public ExpiringCache(final long expireAfterMs, final ConcurrentHashMapV8.Fun<K, V> getter,
-                         final long expirationFreqMs, final Clock clock) {
-        Preconditions.checkArgument(expireAfterMs > 0, "expireAfterMs must be positive.");
-        Preconditions.checkArgument(expirationFreqMs > 0, "expirationFreqMs must be positive.");
+    private ExpiringCache(Builder<K, V> builder) {
+        Preconditions.checkArgument(builder.expirationDurationMs > 0,
+                "Expiration duration must be 1ms or higher.");
+        Preconditions.checkArgument(builder.expirationFrequencyMs > 0, 
+                "Expiration frequency must be 1ms or higher.");
         this.map = new ConcurrentHashMapV8<K, Entry<V>>();
-        this.expireAfterMs = expireAfterMs;
-        this.entryGetter = toEntry(getter);
-        this.clock = clock;
+        this.expireAfterMs = builder.expirationDurationMs;
+        this.entryGetter = toEntry(builder.getter);
+        this.clock = builder.expirationClock;
+        this.removalListener = builder.removalListener;
         final Runnable expirationJob = new Runnable() {
             @Override
             public void run() {
@@ -127,11 +192,14 @@ public class ExpiringCache<K, V> {
                 for (Map.Entry<K, Entry<V>> entry : map.entrySet()) {
                     if (entry.getValue().accessTime < tooOld) {
                         map.remove(entry.getKey(), entry.getValue());
+                        if (removalListener != null) {
+                            removalListener.onRemoval(entry.getKey(), entry.getValue().getValue());
+                        }
                     }
                 }
             }
         };
-        service.scheduleWithFixedDelay(expirationJob, 1, expirationFreqMs, TimeUnit.MILLISECONDS);
+        service.scheduleWithFixedDelay(expirationJob, 1, builder.expirationFrequencyMs, TimeUnit.MILLISECONDS);
     }
 
     private ConcurrentHashMapV8.Fun<K, Entry<V>> toEntry(final ConcurrentHashMapV8.Fun<K, V> underlying) {

@@ -51,14 +51,16 @@ public final class DynamicCounter extends AbstractMonitor<Long> implements Compo
                 System.getProperty(EXPIRATION_PROP_UNIT, DEFAULT_EXPIRATION_UNIT);
         final long expirationValue = Long.valueOf(expiration);
         final TimeUnit expirationUnitValue = TimeUnit.valueOf(expirationUnit);
-        final long expireAfterMs = expirationUnitValue.toMillis(expirationValue);
-        counters = new ExpiringCache<MonitorConfig, Counter>(expireAfterMs,
-                new ConcurrentHashMapV8.Fun<MonitorConfig, Counter>() {
-                    @Override
-                    public Counter apply(final MonitorConfig config) {
-                        return new StepCounter(config);
-                    }
-                });
+        counters =
+                ExpiringCache.builder(
+                        new ConcurrentHashMapV8.Fun<MonitorConfig, Counter>() {
+                            @Override
+                            public Counter apply(final MonitorConfig config) {
+                                return new StepCounter(config);
+                            }
+                        })
+                        .expiresAfter(expirationValue, expirationUnitValue)
+                        .build();
         DefaultMonitorRegistry.getInstance().register(this);
     }
 
